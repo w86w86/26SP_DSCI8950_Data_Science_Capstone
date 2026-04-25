@@ -1,0 +1,5 @@
+Document word, Result of knit in docx files
+
+- 1_Patient_UPC_v2-EDA.docx
+- 2_Patient_UPC_v2--Models.docx
+- 3_NewCoxModel.docx
