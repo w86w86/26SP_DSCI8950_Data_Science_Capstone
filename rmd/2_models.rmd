@@ -1,1 +1,303 @@
+---
+title: "Models selection for Patient Churn Prediction Dataset"
+author: "Team A - Souleymane Diawara"
+date: "03-20-2026"
+output:
+  word_document:
+    toc: true
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    code_folding: hide
+  pdf_document:
+    toc: true
+version: "v1-upc"
+---
 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1.Data Loading and Preparation
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(discrim) 
+library(ranger)   # For Random Forest
+library(xgboost)  # For XGBoost
+
+# Load and prepare data using the new Utils function
+setwd("~/Documents/26SP DSCI8950 - Capstone/R Codes")
+data_raw <- read_csv("patient_churn.csv")
+source("UtilsPatient.R")
+dataset <- prepare_churn(data_raw, target_variable = 'Churned')
+
+set.seed(123)
+# 80/20 Split using the correct target: Churned
+data_split <- initial_split(dataset, prop = 0.8, strata = Churned)
+data_train <- training(data_split)
+data_test  <- testing(data_split)
+
+# 5-Fold Cross-Validation on the training set
+cv_folds <- vfold_cv(data_train, v = 5, strata = Churned)
+
+```
+
+# 2.Recipe Specification
+
+```{r}
+# Define preprocessing recipe
+# This includes normalization, which is essential XGBoost
+churn_recipe <- recipe(Churned ~ ., data = data_train) %>%
+  step_novel(all_nominal_predictors()) %>%
+  step_unknown(all_nominal_predictors()) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_zv(all_predictors()) %>%
+  step_normalize(all_numeric_predictors())
+
+```
+
+# 3. Model definitions & workflow set
+
+```{r}
+
+# 1. Logistic Regression
+lr_spec <- logistic_reg() %>% 
+  set_engine("glm") %>% 
+  set_mode("classification")
+
+# 2. Random Forest
+rf_spec <- rand_forest(trees = 500) %>% 
+  set_engine("ranger") %>% 
+  set_mode("classification")
+
+# 3. XGBoost
+xgb_spec <- boost_tree() %>% 
+  set_engine("xgboost") %>% 
+  set_mode("classification")
+
+# Combine models into a Workflow Set
+churn_models <- workflow_set(
+  preproc = list(base_rec = churn_recipe),
+  models = list(
+    logistic = lr_spec,
+    random_forest = rf_spec,
+    xgboost = xgb_spec
+  )
+)
+```
+
+# 4. Model Training and Assessment
+
+```{r}
+# Evaluate using standard classification metrics
+churn_metrics <- metric_set(accuracy, roc_auc, sens, spec, f_meas)
+
+# Perform resampling across all folds
+models_fitted <- churn_models %>%
+  workflow_map("fit_resamples", 
+               resamples = cv_folds, 
+               metrics = churn_metrics,
+               control = control_grid(save_workflow = TRUE))
+
+# Compare results
+collect_metrics(models_fitted)
+autoplot(models_fitted)
+
+```
+
+Model comparison overview
+
+Note: k-Nearest Neighbors was initially considered as a baseline distance-based classifier. However, it was excluded from the final workflow because the computing environment could not load the required kknn dependency due to a missing Linux system library (libglpk.so.40). Since preliminary results also indicated weaker performance for KNN, the final model comparison focused on Logistic Regression, Random Forest, and XGBoost. These three models provide a useful comparison between an interpretable linear baseline, a bagging-based ensemble model, and a boosting-based ensemble model.
+
+The graphs utilize a Workflow Set to display how each model (Logistic Regression, Random Forest, and XGBoost) performed during cross-validation.
+
+• Metric consistency: All models appear to perform relatively
+
+• ROC AUC performance: We will used this metric as the primary driver for model selection, as it measures the model's ability to distinguish between "Churned" and "Not Churned" patients regardless of the classification threshold.
+
+• Sensitivity vs. Specificity: correctly identifying patients who will churn and Specificity: correctly identifying those who will stay.
+
+Model specific insights: the line segments (error bars) on each point indicate the variance across the 5 folds of cross-validation; shorter bars suggest the model's performance is consistent across different subsets of your data.
+
+# 5. Final Selection and Test Prediction
+
+```{r}
+# Fit the best performing model on the full training set
+best_model <- models_fitted %>% fit_best(metric = "roc_auc")
+
+# Generate test set predictions
+final_predictions <- best_model %>% augment(new_data = data_test)
+
+# Report final metrics (using the second level "Yes" as the positive class)
+churn_metrics(final_predictions, truth = Churned, estimate = .pred_class, 
+              .pred_Yes, event_level = "second")
+```
+
+### Model mapping for metric graphs
+
+To support interpretation of the workflow metric plots, Table 1 summarizes the mapping between each model, its color as shown in the graphs, and its workflow rank.
+
+**Table 1: Model, Color, and Workflow Rank Mapping**
+
+| Workflow Rank | Model Name             | Plot Color |
+|---------------|------------------------|------------|
+| 1             | Random Forest          | Purple     |
+| 2             | Logistic Regression    | Green      |
+| 3             | Boosted Tree (XGBoost) | Pink       |
+
+### How to read the metric graphs
+
+The metric graphs display model performance using 5‑fold cross‑validation. Each panel corresponds to a different evaluation metric: sensitivity, specificity, accuracy, F1‑score, and ROC AUC. Each point represents the mean metric value across folds, while the vertical error bars indicate variability. Smaller error bars suggest more stable performance across resamples.
+
+The x‑axis represents workflow rank, where lower values indicate stronger performance for that metric. All models share the same preprocessing recipe; therefore, differences in performance reflect modeling behavior rather than feature preparation.
+
+### Understanding metrics in a patient Churn context
+
+Sensitivity represents the model’s ability to correctly identify patients who churn, which is critical for early intervention strategies. Specificity measures the ability to correctly identify non‑churning patients. Accuracy provides overall correctness, but in churn problems it can be misleading due to class imbalance.
+
+The F1‑score balances sensitivity and precision and is useful when churn cases are relatively rare. ROC AUC is emphasized in this analysis because it evaluates the model’s ability to distinguish between churned and non‑churned patients across all possible classification thresholds. For this reason, ROC AUC is used as the primary model selection metric.
+
+### Estimated Cross‑Validation Performance by Model
+
+Table 2 summarizes approximate mean performance values observed in the cross‑validation metric plots. These values are visually estimated to support qualitative comparison.
+
+**Table 2: Estimated Cross‑Validation Metric Performance**
+
+| Model               | Accuracy | Sensitivity | Specificity | F1‑Score | ROC AUC |
+|---------------------|----------|-------------|-------------|----------|---------|
+| Random Forest       | \~0.69   | \~0.07      | \~0.95      | \~0.14   | \~0.63  |
+| Logistic Regression | \~0.68   | \~0.21      | \~0.90      | \~0.29   | \~0.65  |
+| Boosted Tree        | \~0.66   | \~0.24      | \~0.85      | \~0.31   | \~0.60  |
+
+### Final Model Selection Using ROC AUC
+
+Using ROC AUC as the primary evaluation criterion, **Logistic Regression is selected as the winning model**. It achieves the highest ROC AUC among all workflows, indicating superior overall discrimination between churned and non‑churned patients across thresholds. While Random Forest shows higher accuracy and specificity, its extremely low sensitivity limits its usefulness in identifying at‑risk patients.
+
+The `fit_best(metric = "roc_auc")` procedure confirms Logistic Regression as the top‑performing workflow.
+
+### Interpretation of the Logistic Regression Model
+
+The Logistic Regression model provides clear interpretability through its estimated coefficients. Variables such as missed appointments, days since last visit, out‑of‑pocket cost, and satisfaction measures exhibit meaningful associations with patient churn risk.
+
+Overall, Logistic Regression offers the best balance of predictive performance, stability, and interpretability, making it the most appropriate model for patient churn prediction in this analysis.
+
+## Logistic Regression Threshold Adjustment (7.7)
+
+Logistic Regression produces probabilistic predictions, where each observation is assigned a probability of belonging to the churned class. By default, a classification threshold of 0.5 is used to convert these probabilities into class labels. However, this default threshold is not necessarily optimal, particularly in imbalanced classification problems such as patient churn prediction. To better understand the trade-off between different classification outcomes, a range of thresholds from 0.10 to 0.90 was evaluated. For each threshold, performance metrics including accuracy, sensitivity, specificity, and F1-score were computed on the test dataset.
+
+```{r}
+# Fit logistic regression workflow on full training data
+final_lr_workflow <- workflow() %>%
+  add_recipe(churn_recipe) %>%
+  add_model(lr_spec) %>%
+  fit(data = data_train)
+
+# Get predicted probabilities on test data
+lr_probs <- predict(final_lr_workflow, data_test, type = "prob") %>%
+  bind_cols(data_test)
+
+# Check column names if needed
+# names(lr_probs)
+
+# Try multiple thresholds
+threshold_results <- map_dfr(seq(0.10, 0.90, by = 0.05), function(thresh) {
+  
+  temp_preds <- lr_probs %>%
+    mutate(
+      .pred_class_custom = ifelse(.pred_Yes >= thresh, "Yes", "No"),
+      .pred_class_custom = factor(.pred_class_custom, levels = c("No", "Yes"))
+    )
+  
+  tibble(
+    threshold = thresh,
+    accuracy = accuracy(temp_preds, truth = Churned, estimate = .pred_class_custom)$.estimate,
+    sensitivity = sens(temp_preds, truth = Churned, estimate = .pred_class_custom, event_level = "second")$.estimate,
+    specificity = spec(temp_preds, truth = Churned, estimate = .pred_class_custom, event_level = "second")$.estimate,
+    f1_score = f_meas(temp_preds, truth = Churned, estimate = .pred_class_custom, event_level = "second")$.estimate
+  )
+})
+
+threshold_results
+```
+
+
+Let's save the model:
+
+```{r}
+# Lets save the model, threshold = 0.30
+threshold <- 0.30
+saveRDS(threshold, "threshold.rds")
+```
+
+**Optimal Threshold Selection**
+
+Based on the results, a threshold around **0.65** provides a practical balance between competing objectives: 
+
+| Sensitivity | Specificity | Accuracy | F1-score |
+|-------------|-------------|----------|----------|
+| 0.697       | 0.409       | 0.606    | 0.707    |
+
+Compared to the default threshold of 0.5, this adjusted threshold:
+
+-   reduces excessive false positives observed at lower thresholds
+
+-   maintains a reasonable ability to detect churned patients
+
+-   improves overall balance as reflected in the F1-score
+
+From an application perspective, the choice of threshold depends on the relative cost of misclassification:
+
+-   **False negatives (missed churners)** may lead to loss of patient continuity and revenue
+
+-   **False positives** may result in unnecessary intervention but are generally less costly
+
+In a healthcare context, early identification of at-risk patients is often prioritized. Therefore, selecting a threshold slightly below the point of equal balance (e.g., 0.65 rather than 0.70) allows the model to retain higher sensitivity while still improving specificity compared to very low thresholds.
+
+Despite being a relatively simple model, Logistic Regression benefits from this flexibility due to its probabilistic output. This reinforces its suitability for this study, where interpretability and controllable decision-making are essential.
+
+
+Example of the threshold of 0.30
+```{r}
+selected_threshold <- 0.30
+
+lr_final_threshold <- lr_probs %>%
+  mutate(
+    .pred_class_custom = ifelse(.pred_Yes >= selected_threshold, "Yes", "No"),
+    .pred_class_custom = factor(.pred_class_custom, levels = c("No", "Yes"))
+  )
+
+# Confusion matrix
+conf_mat(
+  lr_final_threshold,
+  truth = Churned,
+  estimate = .pred_class_custom
+)
+
+# Final metrics at selected threshold
+metric_set(accuracy, sens, spec, f_meas)(
+  lr_final_threshold,
+  truth = Churned,
+  estimate = .pred_class_custom,
+  event_level = "second"
+)
+```
+The confusion matrix shows:
+
+True Positives (Churn correctly identified): 271
+False Positives: 126
+False Negatives: 3
+True Negatives: 1
+
+This results in the following performance:
+
+Accuracy: 0.678
+Sensitivity: 0.989
+Specificity: 0.008
+F1-score: 0.808
+
+At this threshold, the model achieves extremely high sensitivity (98.9%), meaning that almost all churned patients are correctly identified. However, this comes at the cost of very low specificity (0.8%), indicating that nearly all retained patients are incorrectly classified as churned.
+
+This behavior can be interpreted as an aggressive detection strategy, where the model prioritizes capturing all potential churners, even if it generates a large number of false positives.
