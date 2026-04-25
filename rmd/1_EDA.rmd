@@ -1,1 +1,760 @@
+---
+title: "EDA Exploratory Data Analysis for Patient Churn Prediction Dataset"
+author: 'Team A: Souleymane Diawara'
+date: "02-17-2026"
+output:
+  word_document:
+    toc: true
+  pdf_document:
+    toc: true
+latex_engine: xelatex
+version: "v0.2 - Stopped at bivariate analysis and correlation plots"
+editor_options:
+  markdown:
+    wrap: sentence
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.align = 'center')
+
+suppressMessages({
+if(!require(corrplot)){install.packages("corrplot")}
+if(!require(knitr)){install.packages("knitr")}
+if(!require(ggplot2)){install.packages("ggplot2")}
+if(!require(gridExtra)){install.packages("gridExtra")}
+if(!require(factoextra)){install.packages("factoextra")}
+if(!require(FactoMineR)){install.packages("FactoMineR")}
+if(!require('dplyr')){install.packages('dplyr')}
+if(!require('tidyverse')){install.packages('tidyverse')}
+if(!require('ggdendro')){install.packages('ggdendro')}
+  
+  
+library(knitr)
+  
+library(dplyr)
+library(tidyverse)  
+  
+library(factoextra)
+library(FactoMineR)
+
+library(corrplot)
+library(ggplot2)
+library(gridExtra)
+library(ggdendro)
+})
+```
+
+# 1- Brief Description of the Data Set
+
+This Patient Churn prediction dataset in healthcare is a dataset designed for binary classification tasks to predict patient attrition (churn).
+Originally download from Kaggle, it contains 2000 patient records with 21 variables covering demographics, service utilization, satisfaction scores, and financial/engagement.
+The target variable is the binary column "Churn" (1 = Churned, 0 = still active, receiving care there).
+
+The key feature are: - patient demographics (Age, Gender, Location, Tenure), - appointment behavior (Annual Visits, Missed Appointments, Days Since Last Visit, Specialty), - satisfaction metrics (Overall, Wait Time, Staff, Provider - typically 1-5 scale), and - insurance type.
+
+# 2 Data Inspection
+
+## 2.1 Read Data Set
+
+```{r}
+# Load the dataset
+setwd("~/Documents/26SP DSCI8950 - Capstone/R Codes")
+df <- read.csv("patient_churn.csv")
+df <- as.data.frame(df) 
+```
+
+The `r dim(df)[2]`columns of the dataset are `r colnames(df)`.
+
+## 2.2 Check dataset dimensions
+
+The dataset has `r dim(df)[1]` records with `r dim(df)[2]` features.
+
+```{r}
+dim(df)
+```
+
+Let’s observe the first and last few observations
+
+```{r}
+head(df, 3)
+tail(df, 3)
+```
+
+## 2.3 Check data types and structure
+
+```{r}
+str(df)
+```
+
+The dataset contains numerical value and categorical variables as well.
+
+Gender is Male and Female.
+
+3 types of *Satisfactions* in float but between 1-5.
+Categorical the fields are *Insurance_Type*, *Specialty*, and *Location* are categorical.
+As stated, Churned is our target variable, is binary, 0-1.
+
+## 2.4 is there some missing values?
+
+```{r}
+colSums(is.na(df))
+```
+
+No missing values.
+The dataset is clean.
+
+# 3 Data Cleaning
+
+## 3.1 Handle missing data
+
+Per **2.4**, there is no missing data in the data.
+
+## 3.2 Remove duplicated data
+
+```{r}
+sum(duplicated(df)) 
+```
+
+There is no duplicate records
+
+**Partial conclusion:** The dataset contains 2000 observations and 21 variables, including demographic, behavioral, satisfaction, and access-related features.
+No duplicate observations were detected, and no missing data across variables, suggesting minimal risk of bias from incomplete data.
+
+## 3.3 Check outliers
+
+Let's use the IQR method to detect outliers.
+
+```{r}
+findOutliers_by_iqr <- function(df, colname, return_df = FALSE) {
+  values <- df[[colname]]
+  Q1 <- quantile(values, 0.25, na.rm = TRUE)
+  Q3 <- quantile(values, 0.75, na.rm = TRUE)
+  IQR_val <- Q3 - Q1
+  lower_bound <- Q1 - 1.5 * IQR_val
+  upper_bound <- Q3 + 1.5 * IQR_val
+  outliers <- (values < lower_bound | values > upper_bound)
+  
+  if (return_df) {
+    return(list(outlier_df = data.frame(value = values, is_outlier = outliers),
+                outlier_index = which(outliers)))
+  } else {
+    return(which(outliers))
+  }
+}
+```
+
+```{r}
+# Let's find outliers for a couple features: Age,Tenure_Months, Missed_Appointments, Overall_Satisfaction 
+findOutliers_by_iqr(df, "Age")
+findOutliers_by_iqr(df, "Tenure_Months")
+findOutliers_by_iqr(df, "Missed_Appointments")
+findOutliers_by_iqr(df, "Overall_Satisfaction")
+findOutliers_by_iqr(df, "Distance_To_Facility_Miles")
+
+```
+
+No outliers found on: Age,Tenure Months, Missed Appointments, Overall Satisfaction and Distance To Facility Miles.
+
+# 4 Data Preprocessing
+
+## 4.1 Transformations
+
+Because the dataset has some numerical columns with different units, Scaling is important to standardization the columns.
+
+### 4.1.1 Standard Scaler
+
+```{r}
+num_cols <- df %>% select_if(is.numeric) %>% select(-Churned) %>% names()  # exclude target Variable
+num_cols
+```
+
+```{r}
+#building a new dataset df_standard (I did not forget to add the target column temp. removed)
+df_standard <- data.frame(scale(df[num_cols]), Churned = df$Churned)
+head(df_standard)
+```
+
+# 5 Data Analysis and Visualization
+
+## 5.1 Univariate Analysis
+
+## 5.1.1 Categorical Data Counts
+
+The categorical variables are: - Gender - State - Specialty - Insurance_Type - Portal_Usage (binary but categorical) - Billing_Issues (binary) - Churned (target, categorical)
+
+```{r}
+freq_table <- function(data, var) {
+  data %>%
+    count(.data[[var]]) %>%
+    arrange(desc(n)) %>%
+    mutate(
+      Relative_Frequency = n / sum(n),
+      Percentage = round(Relative_Frequency * 100, 2),
+      Variable = var
+    )
+}
+
+key_vars <- c("Gender", "Insurance_Type", "Specialty",
+              "State", "Portal_Usage", "Billing_Issues", "Churned")
+
+freq_results <- lapply(key_vars, function(v) freq_table(df, v))
+
+freq_df <- bind_rows(freq_results)
+
+freq_df
+```
+
+```{r}
+library(knitr)
+
+freq_df %>%
+  arrange(Variable, desc(n)) %>%
+  kable(digits = 3)
+```
+
+**Interpretation**
+
+```{r}
+#Not finish
+df %>%
+  mutate(Churned = factor(Churned, labels = c("Stayed", "Churned"))) %>%
+  ggplot(aes(x = Churned)) +
+  geom_bar(aes(y = after_stat(prop)))
+```
+
+The distribution shows that a majority of patients have churned (around 63%), indicating a noticeable class imbalance in the dataset.
+
+*Distribution*
+
+Gender distribution (male: 50.8%, female: 49.2%): the dataset is well balanced by gender, so gender bias is unlikely to distort the churn model.
+This is good for modeling reliability.
+
+Insurance type can be a very important driver: - self-pay: 26.15% (largest) - medicare: 25.8% - private: 24.15% - medicaid: 23.9%
+
+This is a very evenly distributed variable, but *self-pay* being the largest group is a red flag typically, self-pay patients are more price-sensitive
+
+We will have this hypothesis: self-pay patients are more likely to churn due to financial pressure.
+
+Specialty distribution: - general practice: 15.1% - family medicine: 14.45% - orthopedics: 14.45% - neurology: 14.3% - pediatrics: 14.2% - internal medicine: 13.85% - cardiology: 13.65%
+
+We can see here that the distribution is very uniform across specialties.
+We can observer that no single specialty dominates.
+So the churn differences across specialties will likely be behavioral, not due to sample imbalance.
+That being say, we can safely compare specialties.
+
+State distribution The data is not only patients attending one medical facility but across multiple state - NC for North Carolina: 12.95% - IL for Illinois: 10.7% - FL for Florida: 10.65% - PA for Pennsylvania: 10.25% - NY for New York: 9.85% - and other states like OH-Ohio, CA-California, GA-Georgia, TX-Texas, MI-Michigan are around 9%.
+
+All 10 states are moderately balanced, but NC is slightly overrepresented, but we have no extreme geographic skew.
+In this picture, the geographic variation exists but is not dominant, but it is still worth testing for regional churn patterns.
+
+Portal usage (No usage (0): 79.4%, Usage (1): 20.6%).
+
+This is a very strong signal since our data is highly imbalanced.
+This means most patients are not digitally engaged.\
+
+The hypothesis: - (Ho) patients who use the portal are more engaged - (H1) non-users are more likely to churn
+
+If this is true, *Portal usage* will likely be one of the top predictive features
+
+Billing issues (no issues (0): 92.15%, issues (1): 7.85%)
+
+This event about billing is very skewed.
+Even though rare, billing issues may have a disproportionate impact on churn.
+Some complication with billing will always get the patients with financial strain to likely churn (high-impact variable), regarless of the low-frequency.
+
+Churn (churned (1): 68.35%, Not churned (0): 31.65%)
+
+This is the target variable but the proportion shows an imbalanced group: - majority of patients have churned
+
+This means on analyzing and modeling, class weighting and resampling (smote) needs to be addressed.
+
+For the business insight: Patient retention is a serious issue in this dataset.
+Loosing almost 70% of patients have a significant impact on establishment budgeting, personal.
+
+```{r}
+df %>%
+  group_by(Insurance_Type, Churned) %>%
+  summarise(Frequency = n(), .groups = "drop") %>%
+  group_by(Insurance_Type) %>%
+  mutate(
+    Relative_Frequency = Frequency / sum(Frequency),
+    Percentage = round(Relative_Frequency * 100, 2)
+  ) %>%
+  arrange(Insurance_Type, desc(Churned))
+```
+
+This table breaks down the churn distribution across the four insurance categories (Medicaid, Medicare, Private, and Self-Pay).
+It shows both absolute counts and relative percentages within each insurance group.
+
+```{r}
+library(tidyverse)
+library(scales)
+
+insurance_churn <- tibble(
+  Insurance_Type = c("Medicaid", "Medicaid", "Medicare", "Medicare", 
+                     "Private", "Private", "Self-Pay", "Self-Pay"),
+  Churned        = c(1, 0, 1, 0, 1, 0, 1, 0),
+  Frequency      = c(337, 141, 344, 172, 335, 148, 351, 172),
+  Percentage     = c(70.50, 29.50, 66.67, 33.33, 69.36, 30.64, 67.11, 32.89)
+)
+
+# Order insurance types by total frequency (largest first)
+insurance_order <- insurance_churn %>%
+  group_by(Insurance_Type) %>%
+  summarise(total = sum(Frequency)) %>%
+  arrange(desc(total)) %>%
+  pull(Insurance_Type)
+
+# Polished stacked bar plot
+ggplot(insurance_churn, aes(x = factor(Insurance_Type, levels = insurance_order), 
+                            y = Percentage, 
+                            fill = factor(Churned, levels = c(0,1),
+                                          labels = c("Retained", "Churned")))) +
+  geom_col(position = "stack", width = 0.72, color = "white", alpha = 0.92) +
+  geom_text(aes(label = paste0(round(Percentage, 1), "%")),
+            position = position_stack(vjust = 0.5),
+            color = "white", fontface = "bold", size = 4.8) +
+  scale_fill_manual(values = c("#2E7D32", "#D32F2F")) +   # Green = Retained, Red = Churned
+  scale_y_continuous(labels = percent_format(scale = 1), breaks = seq(0, 100, 25)) +
+  labs(
+    title    = "Patient Churn Rate by Insurance Type",
+    subtitle = "Consistently high churn across all categories (66.7% - 70.5%)",
+    x        = "Insurance Type",
+    y        = "Percentage of Patients",
+    fill     = "Outcome",
+    caption  = "N = 2,000 patients | Source: patient_churn.csv"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle    = element_text(hjust = 0.5, color = "gray30", size = 12.5),
+    axis.title.x     = element_text(face = "bold", margin = margin(t = 12)),
+    axis.title.y     = element_text(face = "bold", margin = margin(r = 12)),
+    axis.text.x      = element_text(face = "bold", size = 12),
+    legend.position  = "top",
+    legend.title     = element_text(face = "bold"),
+    panel.grid.major.x = element_blank(),
+    plot.caption     = element_text(hjust = 0, face = "italic", size = 10, color = "gray50")
+  )
+```
+
+*pptx: The stacked bar chart illustrates that churn rates remain consistently elevated across all insurance types, ranging from 66.67% (Medicare) to 70.50% (Medicaid). The narrow variation suggests that patient attrition is driven more by experiential and behavioral factors (satisfaction, engagement, and financial friction) than by insurance status itself.*
+
+The churn rate (graphically represented above) is consistent across all four insurance types, ranging narrowly between 66.67% and 70.50%.
+This is a very small variation (less than 4 percentage points)
+
+*Medicaid* shows the highest churn rate at 70.50%.
+These patients, who are typically lower-income and often face greater socioeconomic barriers, appear slightly more vulnerable to leaving the practice.
+
+*Private* insurance follows closely at 69.36%: self-Pay patients churn at 67.11% - interestingly not the highest, even though they bear the full financial burden.
+This somewhat contradicts the common assumption that self-pay patients are the most price-sensitive.
+
+*Medicare* has the lowest churn rate at 66.67% (a modest 3.83 percentage point advantage over Medicaid).
+This may reflect greater loyalty or fewer alternative options among older, often retired patients covered by Medicare.
+
+**Overall pattern**:
+
+Insurance type is a weak differentiator of churn behavior in this dataset.
+The fact that churn exceeds two-thirds of patients in every insurance category points to systemic rather than insurance-specific drivers of attrition.
+
+### 5.1.2 Categorical Plots
+
+```{r}
+library(patchwork)
+
+# Plot 1: Gender + Insurance_Type
+p_ins_gender <- df %>%
+  select(Gender, Insurance_Type, Churned) %>%
+  pivot_longer(cols = c(Gender, Insurance_Type)) %>%
+  group_by(name, value) %>%
+  summarise(churn_rate = mean(Churned)*100, .groups = "drop") %>%
+  ggplot(aes(x = reorder(value, churn_rate), y = churn_rate)) +
+  geom_col(fill = "#D32F2F", alpha = 0.85) +
+  geom_text(aes(label = paste0(round(churn_rate,1),"%")), hjust = -0.2, fontface="bold") +
+  coord_flip() +
+  facet_wrap(~ name, scales = "free_y") +
+  labs(title = "Churn Rate by Gender and Insurance Type", y = "Churn Rate (%)") +
+  theme_minimal()
+
+# Plot 2: Specialty + State  
+p_spec_state <- df %>%
+  select(Specialty, State, Churned) %>%
+  pivot_longer(cols = c(Specialty, State)) %>%
+  group_by(name, value) %>%
+  summarise(churn_rate = mean(Churned)*100, .groups = "drop") %>%
+  ggplot(aes(x = reorder(value, churn_rate), y = churn_rate)) +
+  geom_col(fill = "#F0000F", alpha = 0.85) +
+  geom_text(aes(label = paste0(round(churn_rate,1),"%")), hjust = -0.2, fontface="bold") +
+  coord_flip() +
+  facet_wrap(~ name, scales = "free_y", ncol = 1) +
+  labs(title = "Churn Rate by Specialty and State", y = "Churn Rate (%)") +
+  theme_minimal()
+
+# Combine them
+p_ins_gender / p_spec_state
+
+
+```
+
+### 5.1.3 Numerical Variables: Descriptive Statistics
+
+```{r}
+df[num_cols] %>% #num_cols: in (4.1.1) it represent all numerical columns 
+  stack() %>%
+  ggplot(aes(x = values, y = ind, fill = ind)) +
+          geom_boxplot() +
+          theme_minimal() +
+          labs(title = "Boxplots of Numeric Unstandardized Features"
+        )
+```
+
+*Avg_Out_Of_Pocket_Cost* and *Days_Since_Last_Visit* have very wide ranges and long upper whiskers: high costs and long distances for some patients.
+
+Let's see what the standardized version of the dataset shows:
+
+```{r}
+df_standard[num_cols] %>% #num_cols: in (4.1.1) it represent all numerical columns 
+  stack() %>%
+  ggplot(aes(x = values, y = ind, fill = ind)) +
+          geom_boxplot() +
+          theme_minimal() +
+          labs(title = "Boxplots of Numeric Unstandardized Features"
+        )
+
+```
+
+*Avg_Out_Of_Pocket_Cost* shows the widest spread in the 3rd quartiles and a long upper whisker, indicating significant financial burden for many patients - a likely strong driver of churn.
+
+*Distance_To_Facility_Miles* is also wide opened not skewed with extreme values, suggesting that patients live all over from the facility.
+Missed_Appointments has a classic right-skewed meaning the majority of patients are reliable (low/zero misses).
+
+*Billing_Issues* and *Portal_Usage* are binary so they are fitting well in this boxplot.
+
+### 5.1.5 Numerical Variables: Histograms
+
+```{r}
+par(mfrow = c(3, 3))  # 3x3 columns grid
+hist(df$Age, 
+     main = "Age", 
+     xlab = "Age (years)", 
+     col = "lightblue", 
+     border = "black")
+
+hist(df$Tenure_Months, 
+     main = "Tenure (Months)", 
+     xlab = "Months", 
+     col = "lightgreen", 
+     border = "black")
+
+hist(df$Visits_Last_Year, 
+     main = "Visits Last Year", 
+     xlab = "Number of Visits", 
+     col = "lightyellow", 
+     border = "black")
+
+hist(df$Missed_Appointments, 
+     main = "Missed Appointments", 
+     xlab = "Count", 
+     col = "salmon", 
+     border = "black")
+
+hist(df$Days_Since_Last_Visit, 
+     main = "Days Since Last Visit", 
+     xlab = "Days", 
+     col = "lightcoral", 
+     border = "black")
+
+hist(df$Overall_Satisfaction, 
+     main = "Overall Satisfaction", 
+     xlab = "Score (1-5)", 
+     col = "lightskyblue", 
+     border = "black")
+
+hist(df$Wait_Time_Satisfaction, 
+     main = "Wait Time Satisfaction", 
+     xlab = "Score (1-5)", 
+     col = "lightblue", 
+     border = "black")
+
+hist(df$Staff_Satisfaction, 
+     main = "Staff Satisfaction", 
+     xlab = "Score (1-5)", 
+     col = "lightblue", 
+     border = "black")
+
+hist(df$Provider_Rating, 
+     main = "Provider Rating", 
+     xlab = "Score (1-5)", 
+     col = "lightblue", 
+     border = "black")
+
+par(mfrow = c(1, 1)) # Reset plotting layout
+
+```
+
+*Age* shows a roughly symmetric, slightly left-skewed distribution centered around 50-60 years, with most patients between 30 and 70 years old.
+Middle age patients.
+*Tenure_Months* is approximately uniform across 0 to 120 months (10 years), indicating a relatively even spread of patient loyalty durations; No strong concentration of very new or very long-term patients.
+*Visits_Last_Year* is right-skewed with a peak at 0-1 visits and a long tail up to 15+, showing that a large portion of patients have low annual utilization, while a smaller group visits frequently.
+*Missed_Appointments* is strongly right-skewed: the majority of patients have 0 missed appointments, with a decline as the count increases.
+This highlights a small repeated no-shows, a signal of Churn risk.
+*Days_Since_Last_Visit* shows a wide, roughly uniform spread from 0 to 800+ days, highly variable.
+
+## 5.2 Bivariate Analysis
+
+This section examines the relationship between individual predictors and the binary outcome Churned (1 = churned, 0 = retained).
+We use appropriate visualizations, descriptive comparisons, and inferential statistics to identify which variables show meaningful differences between retained and churned patients.
+
+### 5.2.1 Numeric Variables vs. Churned
+
+```{r}
+# Boxplots of numeric variables by Churn status
+numeric_vars <- c("Age", "Tenure_Months", "Visits_Last_Year", "Missed_Appointments",
+                  "Days_Since_Last_Visit", "Overall_Satisfaction", "Wait_Time_Satisfaction",
+                  "Staff_Satisfaction", "Provider_Rating", "Avg_Out_Of_Pocket_Cost",
+                  "Distance_To_Facility_Miles")
+
+df %>%
+  select(all_of(numeric_vars), Churned) %>%
+  pivot_longer(cols = -Churned, names_to = "Variable", values_to = "Value") %>%
+  ggplot(aes(x = factor(Churned, labels = c("Retained", "Churned")), 
+             y = Value, fill = factor(Churned))) +
+  geom_boxplot(alpha = 0.8, outlier.shape = 21, outlier.size = 1.5) +
+  scale_fill_manual(values = c("#2E7D32", "#D32F2F")) +
+  facet_wrap(~ Variable, scales = "free_y", ncol = 3) +
+  labs(title = "Distribution of Numeric Variables by Churn Status",
+       subtitle = "Clear differences visible in satisfaction, engagement, and financial variables",
+       x = "Churn Status",
+       y = "Value") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "top",
+        strip.text = element_text(face = "bold"))
+```
+
+The boxplots reveal several meaningful differences between retained and churned patients.
+Churned patients tend to report lower satisfaction across *Overall Satisfaction*, *Wait Time Satisfaction*, and *Provider Rating*.
+They also show signs of reduced engagement, with higher *Days Since Last Visit*, slightly more *Missed Appointments*, and shorter *Tenure_Months*.
+
+Additionally, churned patients have a higher *average Out Of Pocket Cost* and live slightly farther from the facility (*Distance To Facility Miles*).
+
+In contrast, variables such as *Age* and *Visits Last Year* show smaller or overlapping distributions, suggesting weaker bivariate relationships.
+These patterns support the hypothesis that **service experience quality**, **recent engagement**, and **financial/access** barriers are key factors associated with higher churn risk.
+
+### 5.2.2 Categorical Variables vs. Churned
+
+This was already discuss on point ##5.1.1 Categorical Data Counts from the univariate section showing the faceted bar chart
+
+This section high the following variables: "Gender", "Insurance_Type", "Specialty", "State"
+
+```{r}
+# Churn rate by categorical variables (summary table)
+cat_vars <- c("Gender", "Insurance_Type", "Specialty", "State")
+
+df %>%
+  select(all_of(cat_vars), Churned) %>%
+  pivot_longer(cols = -Churned, names_to = "Variable", values_to = "Category") %>%
+  group_by(Variable, Category) %>%
+  summarise(
+    n = n(),
+    churn_rate = mean(Churned),
+    .groups = "drop"
+  ) %>%
+  arrange(Variable, desc(churn_rate)) %>%
+  knitr::kable(digits = 3, caption = "Churn Rate by Categorical Variables")
+```
+
+Churn rates remain consistently high ( 64%-72%) across all categorical variables with very limited variation.
+Gender shows almost identical churn proportions between males and females.
+Among insurance types, Medicaid has the highest churn rate (70.5%), while Medicare has the lowest (66.7%).
+Specialty and State also display modest differences, but no category deviates substantially from the overall churn rate of 68.35%.
+This lack of strong differentiation is consistent with non-significant Chi-square tests and low effect sizes.
+It indicates that demographic and administrative factors (Gender, State, Specialty, Insurance_Type) have weak bivariate associations with churn compared to behavioral and experiential variables.
+
+*pptx: Bivariate analysis against the target variable Churned highlights that patient attrition is most strongly associated with lower satisfaction scores, reduced engagement (longer gaps since last visit and shorter tenure), and higher financial/access burden (elevated out-of-pocket costs and distance to facility). In contrast, demographic and categorical variables show only marginal differences and limited predictive value. These findings suggest that churn is driven primarily by modifiable service-related and behavioral factors rather than fixed patient characteristics. This has important implications for both survival modeling (Cox PH) and machine learning approaches, where engagement and satisfaction features should be prioritized.*
+
+## 5.3 Summary of Relevant Variables for Churn Prediction
+
+To understand which variables differ meaningfully between patients who were *Retained* and those who *Churned*, we compute the following for each numeric predictor:
+
+-   **Mean_Retained**: the average value of the variable among patients who remained.
+-   **Mean_Churned**: the average value among patients who churned.
+-   **p_value**: the probability of observing a difference at least as extreme as the one in our data, assuming no true difference exists.
+-   **Significance**: a conventional indicator of statistical evidence (*, **,*** ).
+
+This analysis helps identify variables whose distributions differ across churn outcomes, which is essential for both understanding the underlying behavioral patterns and selecting features for predictive modeling.
+
+## 5.3.1 Statistical Meaning
+
+For each variable, we conduct an independent-samples *t*-test comparing Retained vs. Churned groups.
+
+-   **Null Hypothesis (H0):**\
+    The mean of the variable is the same for Retained and Churned patients.
+
+$$
+  H_0: mu_Retained = mu_Churned
+$$
+
+-   **Alternative Hypothesis (H1):**\
+    The mean differs between the two groups.
+
+$$
+  H_1: mu_Retained != mu_Churned
+$$
+
+A small p‑value indicates evidence against the null hypothesis, suggesting that the variable differs systematically between groups and may be relevant for predicting churn.
+
+While p‑values quantify statistical evidence, the **direction and magnitude** of the mean differences provide substantive insight into how patient behavior or experience relates to churn.
+
+## 5.3.1 Compute means, p-values, Cohen’s d, significance
+
+```{r}
+library(tidyverse)
+library(effectsize)
+
+df <- df %>%
+  mutate(Churn = factor(Churned, labels = c("Retained","Churned")))
+
+numeric_vars <- df %>%
+  select(where(is.numeric)) %>%
+  select(-Churned) %>%
+  names()
+
+compute_stats <- function(varname) {
+
+  x <- df %>% select(Churn, all_of(varname))
+
+  means <- x %>%
+    group_by(Churn) %>%
+    summarize(mean_value = mean(.data[[varname]], na.rm = TRUE)) %>%
+    pivot_wider(names_from = Churn, values_from = mean_value)
+
+  ttest <- t.test(
+    formula = as.formula(paste(varname, "~ Churn")),
+    data = x
+  )
+
+  d <- effectsize::cohens_d(
+    x[[varname]],
+    x$Churn
+  )
+
+  tibble(
+    Variable = varname,
+    Mean_Retained = means$Retained,
+    Mean_Churned = means$Churned,
+    p_value = ttest$p.value,
+    Cohen_d = d$Cohens_d,
+    Significance = case_when(
+      ttest$p.value < 0.001 ~ "***",
+      ttest$p.value < 0.01  ~ "**",
+      ttest$p.value < 0.05  ~ "*",
+      TRUE ~ "ns"
+    )
+  )
+}
+
+results <- map_dfr(numeric_vars, compute_stats) %>%
+  arrange(p_value)
+
+results
+```
+
+## 5.3.2 Interpretation
+
+The statistical comparison between retained and churned patients highlights several meaningful differences across key variables.
+Among the strongest indicators of churn are: **Overall_Satisfaction**, \
+**Days_Since_Last_Visit**, \
+**Wait_Time_Satisfaction**, \
+**Tenure_Months**, and \
+**Distance_To_Facility_Miles**, all of which show highly significant differences (p \< 0.001).
+
+For example, retained patients report a higher **average overall satisfaction score (3.48)** \
+compared to churned patients **(3.15)**, suggesting that lower satisfaction with care experience is associated with a higher likelihood of leaving the provider.
+A similar pattern is observed for **wait-time satisfaction**, where retained patients report a mean score of **3.41** compared to **3.24** among churned patients.
+
+Engagement-related variables also show clear differences.
+The **average number of days since the last visit** is higher among churned patients (**378.6 days**) compared to retained patients (**339.1 days**), indicating reduced recent interaction with the healthcare system before churn occurs.
+Similarly, retained patients have a longer **tenure with the provider (64.8 months)** than churned patients (**58.8 months**), suggesting that longer relationships with the provider reduce churn risk.
+
+Accessibility and financial factors also appear to contribute to patient attrition.
+Churned patients live slightly farther from the healthcare facility (**25.9 miles**) compared to retained patients (**23.6 miles**), and they incur higher **average out-of-pocket costs (\$859)** compared to retained patients (**\$787**).
+These results suggest that logistical barriers and financial burden may play a role in patient churn decisions.
+
+Behavioral variables also show statistically significant differences.
+Churned patients have slightly more **missed appointments (2.11)** than retained patients **(1.85)** and lower **portal usage (0.19 vs. 0.25)**, which may reflect lower engagement with healthcare services.
+
+Although many variables are statistically significant, the **effect sizes (Cohen’s d)** are generally small to moderate, ranging from approximately **0.11 to 0.33** in absolute value.
+This indicates that **no single predictor strongly explains patient churn on its own**.
+Instead, churn behavior appears to result from the combined influence of multiple factors related to patient experience, engagement patterns, accessibility, and financial burden.
+
+In contrast, some variables such as **Referrals_Made** and **Staff_Satisfaction** do not show statistically significant differences between retained and churned patients, suggesting that these factors may play a limited role in explaining attrition individually.
+
+Overall, these results indicate that patient churn is primarily driven by **experience quality, engagement recency, and access-related barriers**, rather than demographic or administrative characteristics alone.
+
+This approach treats churn as a simple binary outcome, ignoring a critical dimension of the problem: **time**.
+
+In reality, churn is not merely a yes/no event - it is a time-to-event process.
+Patients churn at different points in their lifecycle, and the timing of churn carries essential information about risk, engagement, and the underlying hazard structure.
+
+For example:
+
+-   A patient who churns after 6 months is fundamentally different from one who churns after 5 years.
+-   Variables such as *Tenure_Months*, *Days_Since_Last_Visit*, and *Visits_Last_Year* are inherently temporal and cannot be fully understood without modeling the time dimension.
+-   The hazard of churn may not be constant; it may accelerate or decelerate depending on satisfaction, engagement, or access barriers.
+
+Because of this, we move beyond simple group comparisons and adopt a **survival analysis framework**, which allows us to model:
+
+-   **time until churn**,
+-   **censoring** (patients who have not yet churned),
+-   **hazard rates** (instantaneous risk of churn), and
+-   **how predictors shift the hazard over time**.
+
+Survival models such as the **Cox proportional hazards model** provide a richer and more realistic understanding of churn dynamics.
+
+In the next section, we develop some Machine learning and survival models to quantify how patient characteristics influence the timing and risk of churn.
+
+## 6 Predictive Modeling Framework
+
+While the statistical comparisons provide valuable insights into variables associated with churn, they evaluate predictors **individually** and do not account for interactions between variables, nonlinear relationships, or the combined predictive power of multiple features.
+To better understand these complex relationships, the analysis proceeds with **predictive modeling techniques**.
+
+Supervised machine learning models allow predictors to be evaluated **jointly rather than independently**, enabling the detection of complex patterns that cannot be captured through simple statistical comparisons.
+In this study, several classification algorithms are implemented to predict patient churn and compare their predictive performance.
+These models include methods such as
+
+-   **Logistic Regression,**
+
+-   **Linear and**
+
+-   **Quadratic Discriminant Analysis,**
+
+-   **K-Nearest Neighbors,**
+
+-   **and other machine learning algorithms introduced in the course workshops**.
+
+To ensure robust evaluation, the modeling process follows standard machine learning procedures including:
+
+-   **train-test data splitting**,
+
+-   **cross-validation**, and
+
+-    **hyperparameter tuning**.
+
+Model performance is evaluated using metrics such as **accuracy, precision, recall, and ROC-AUC**, allowing the identification of the model that best predicts patient churn.
+
+However, predicting whether a patient churns is only one aspect of the problem.
+In practice, patient attrition also involves a **temporal dimension**, since patients may leave at different stages of their relationship with the healthcare provider.
+
+To incorporate this time dimension, the analysis also considers **survival analysis techniques**, which model **time until churn occurs** rather than treating churn as a simple binary outcome.
+Survival models account for:
+
+-    the **timing of churn events**,
+
+-    **censored observations** (patients who have not yet churned), and
+
+-    the **hazard rate**, representing the instantaneous risk of churn.
+
+In particular, the **Cox proportional hazards model** is used to examine how patient characteristics influence the timing and risk of attrition over time.
+
+By combining **exploratory analysis, machine learning classification models, and survival analysis**, this study provides a comprehensive framework for understanding both the **drivers and dynamics of patient churn**.
 
