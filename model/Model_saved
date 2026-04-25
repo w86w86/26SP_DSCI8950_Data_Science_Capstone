@@ -1,0 +1,50 @@
+The model/ folder contains saved model objects used for future patient churn prediction. 
+The main file is an .rds file, which is an R serialized object. In this project, 
+the .rds file stores the trained Logistic Regression workflow, including both the preprocessing recipe and the fitted model. 
+Saving the full workflow is important because it ensures that future patient datasets receive the same transformations, 
+such as dummy encoding and normalization, before predictions are made.
+
+The new dataset used for prediction must contain the same feature names and compatible data types as the training dataset. 
+If required columns are missing or renamed, the saved workflow may fail or produce unreliable predictions.
+
+
+```{r save-final-model, echo=TRUE, warning=FALSE, message=FALSE}
+# Fit final logistic regression workflow
+final_lr_workflow <- workflow() %>%
+  add_recipe(churn_recipe) %>%
+  add_model(lr_spec) %>%
+  fit(data = data_train)
+
+# Save final model workflow
+saveRDS(final_lr_workflow, "model/final_churn_logistic_workflow.rds")
+
+# Save selected threshold
+selected_threshold <- 0.30
+saveRDS(selected_threshold, "model/selected_threshold.rds")
+```
+
+
+To load the model, include this rmd code and use the saved model
+
+```{r load-and-use-model, echo=TRUE, warning=FALSE, message=FALSE}
+# Load saved model and threshold
+final_model <- readRDS("model/final_churn_logistic_workflow.rds")
+selected_threshold <- readRDS("model/selected_threshold.rds")
+
+# New patient data must contain the same predictors used during training
+# Example:
+# new_data <- read.csv("data/new_patient_data.csv")
+
+# Generate predicted probabilities
+new_probabilities <- predict(final_model, new_data, type = "prob")
+
+# Apply selected threshold
+new_predictions <- new_probabilities %>%
+  bind_cols(new_data) %>%
+  mutate(
+    churn_prediction = ifelse(.pred_Yes >= selected_threshold, "Churned", "Retained")
+  )
+
+# View results
+new_predictions
+```
