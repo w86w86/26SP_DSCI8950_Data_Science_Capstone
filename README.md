@@ -32,7 +32,7 @@ Survival Analysis:
 - report/
 
 ## How to Run
-1. Clone repo *git clone [https://github.com/your-username/patient-churn-analysis](https://github.com/w86w86/26SP_DSCI8950_Data_Science_Capstone.git)*
+1. Clone repo *git clone [patient-churn-analysis](https://github.com/w86w86/26SP_DSCI8950_Data_Science_Capstone.git)*
 2. Open in RStudio
 3. Run Rmd files in this order: EDA > Modeling > Survival Analysis
 
