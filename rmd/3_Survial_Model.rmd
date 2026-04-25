@@ -1,1 +1,351 @@
+---
+title: "CoxPH Model"
+author: "Souleymane Diawara - Baba Sirima"
+date: "2026-03-28"
+output:
+  word_document:
+    toc: true
+    toc_depth: '3'
+  html_document:
+    toc: true
+    toc_depth: 3
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1. Load packages
+```{r}
+library(tidyverse)
+library(survival)
+library(survminer)
+library(broom)
+library(janitor)
+library("xfun")
+```
+
+# 2. Load and prepare data
+
+# prepare data 
+```{r}
+setwd("~/Documents/26SP DSCI8950 - Capstone/R Codes")
+cox_data <- read_csv("patient_churn.csv", show_col_types = FALSE) %>%
+  clean_names() %>%
+  mutate(
+    last_interaction_date = as.Date(last_interaction_date),
+    gender = as.factor(gender),
+    state = as.factor(state),
+    specialty = as.factor(specialty),
+    insurance_type = as.factor(insurance_type),
+    churned = as.numeric(churned),
+    tenure_months = as.numeric(tenure_months)
+  ) 
+```
+
+# Create survival object combining the time and event,prepare the data to fit coxPH model 
+
+```{r}
+#Survvival object 
+surv_obj <- with(cox_data, Surv(time = tenure_months, event = churned))
+surv_obj
+```
+
+
+####  FIT DIFFERENT MODELS
+
+# Model 1: Full model
+```{r}
+cox_full <- coxph(
+  surv_obj ~ age + gender + state + specialty + insurance_type +
+    visits_last_year + missed_appointments + days_since_last_visit +
+    overall_satisfaction + wait_time_satisfaction + staff_satisfaction +
+    provider_rating + avg_out_of_pocket_cost + billing_issues +
+    portal_usage + referrals_made + distance_to_facility_miles,
+  data = cox_data
+)
+summary(cox_full)
+ AIC(cox_full)
+ 
+```
+##COmment: The full Cox PH model has an AIC of 18194.01, which reflects the model’s overall quality. The results show also that only a few variables have a strong and statistically significant impact on patient churn, specifically days_since_last_visit, overall_satisfaction, wait_time overall_satisfaction, referrals_made, and distance_to_facility. These variables are considered significant because their p-values are less than 0.05, indicating strong statistical evidence
+
+
+### IMPORTANT VARIABLES FROM BEST MODEL
+
+
+```{r}
+cox_tidy <- tidy(cox_full) %>%
+  mutate(
+    abs_z = abs(statistic),
+    significance = ifelse(p.value < 0.05, "Significant", "Not Significant"),
+    p_label = paste0("p = ", signif(p.value, 2))
+  )
+
+# Top significant variables
+top_sig <- cox_tidy %>%
+  filter(p.value < 0.05) %>%
+  arrange(desc(abs_z)) %>%
+  slice_head(n = 5)   # you can change 5 if needed
+
+# Add 2 non-significant variables
+top_nonsig <- cox_tidy %>%
+  filter(p.value >= 0.05) %>%
+  arrange(desc(abs_z)) %>%
+  slice_head(n = 2)
+
+# Combine
+final_data <- bind_rows(top_sig, top_nonsig)
+
+ggplot(final_data, aes(x = reorder(term, abs_z), y = abs_z, fill = significance)) +
+  geom_col() +
+  geom_text(aes(label = p_label), hjust = -0.05, size = 3) +
+  coord_flip() +
+  labs(
+    title = "Key Drivers of Patient Churn (Full_Model)",
+    x = "Variable",
+    y = "|z|-Statistic"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  ) +
+  expand_limits(y = max(final_data$abs_z) + 0.8)
+```
+
+
+
+
+```{r}
+cox_tidy <- tidy(cox_full) %>%
+  mutate(
+    abs_z = abs(statistic),
+    significance = ifelse(p.value < 0.05, "Significant", "Not Significant"),
+    p_label = paste0("p = ", signif(p.value, 2))
+  ) %>%
+  arrange(abs_z) %>%
+  slice_head(n = 7) 
+
+ggplot(cox_tidy, aes(x = reorder(term, abs_z), y = abs_z, fill = significance)) +
+  geom_col() +
+  geom_text(aes(label = p_label), hjust = -0.05, size = 3) +
+  coord_flip() +
+  labs(
+    title = "Significant Variables in the Full Cox PH Model",
+    x = "Variable",
+    y = "|z|-Statistic"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  ) +
+  expand_limits(y = max(cox_tidy$abs_z) + 0.8)
+```
+
+
+
+
+# Model 2: Reduced / significant predictors from model_full
+
+###To improve the interpretability and reliability of the model, a reduced Cox Proportional Hazards model will be deveoped  by focusing only on statistically significant variables. In the full model, several predictors showed weak or non-significant effects, which can introduce noise and reduce model clarity. By retaining only the significant variables, the reduced model highlights the most influential factors driving patient churn
+
+```{r}
+cox_reduced <- coxph(
+  surv_obj ~ overall_satisfaction + days_since_last_visit +
+    wait_time_satisfaction + referrals_made +
+    distance_to_facility_miles,
+  data = cox_data
+)
+summary(cox_reduced)
+AIC(cox_reduced)
+```
+
+# With an AIC egal 0.552, the result show that reduced model is performing less that the full 
+
+## CHOOSE BEST MODEL based on AIC 
+```{r}
+# AIC(cox_full) vs AIC(cox_reduced)
+print("AIC_cox_full)")
+AIC(cox_full)
+print("AIC_cox_reduced")
+AIC (cox_reduced)
+
+
+best_model <- cox_reduced  
+
+```
+
+## Check the best_mdoel assumption 
+```{r}
+## Method: Schoenfeld residual test (p<0.05 violate  and p>0.05 satisfy)
+ph_test <- cox.zph(best_model)
+ph_test
+```
+# With the P of global =0.92 > 0.05 we conclude that the harzard assumption is statisfy. 
+###__________________________________
+### Model interpratation ( full model )
+##_________________________________________
+
+# From this cox PH mathimatic  funtion: h(t) = h0(t)exp(b1X1+b2X2+b3X3 +.....bnXn) or logh(t)= logh0(t)+ b1X1 + b2X2 + b3X3 +.....+ bnXn
+
+
+# In our case we have : logh(t) =logho(t)+(-0.01962)overall_satisfaction + (0.00049)days_since_last_visit ) +(-0.090)wait_time_satisfaction +(-0.5)refferal_made +(0.0054)distance_to_facility_miles 
+
+#
+
+#Hazard ratio rule : 
+#Exp(coef)= HR
+#If HR < 1 → decrease in risk of (1−HR)*100
+#If HR > 1 → increase in risk of (HR-1)*100
+
+# overall_satisfaction Exp(coef)= HR = 0.912 which means increasing the overall satifaction of 1 unit will decrease the risk of leaving of 8.8%
+# distance_to_facility_miles : Exp(coef) = 1.00498 wich means increasing the distnace to faciltig of 1 miles will increase the risk of leaving of 0.0498%
+
+
+```{r}
+library(survival)
+library(survminer)
+
+# Fit cumulative hazard from Cox model
+fit_cumhaz <- survfit(best_model)
+## Survival curve 
+ggsurvplot(
+  fit_cumhaz,
+  data = cox_data,
+  conf.int = TRUE,
+  ggtheme = theme_minimal(),
+  title = "Survival Curve (best Model)",
+  xlab = "Tenure (Months)",
+  ylab = "Probability of Remaining Active"
+)
+```
+
+```{r}
+# Plot cumulative hazard
+ggsurvplot(
+  fit_cumhaz,
+  data = cox_data,
+  fun = "cumhaz",
+  conf.int = TRUE,
+  ggtheme = theme_minimal(),
+  title = "Cumulative Hazard Function Estimate (best Model )",
+  xlab = "Tenure (Months)",
+  ylab = "Cumulative Hazard"
+)
+```
+
+
+##Case study; 
+
+# Let consider two individuals from our data
+
+### Individual 1 has:lower risk
+#Overall_satisfaction (5)
+#days_since_last_visit(10)
+#distance_to_facitlity_miles (5)
+#wait_time_satisfaction(5)
+#referral_made(2)
+
+##### Individual 2 has:
+#Overall_satisfaction(2)
+#days_since_last_visit(90)
+#distance_to_facitlity_miles(25)
+#wait_time_satisfaction (2)
+#referrals_made (0)
+
+
+```{r}
+new_patients <- data.frame(
+  age = c(40, 40),
+  gender = factor(c("Male", "Male"), levels = levels(cox_data$gender)),
+  state = factor(c("NY", "NY"), levels = levels(cox_data$state)),
+  specialty = factor(c("Family Medicine", "Family Medicine"), levels = levels(cox_data$specialty)),
+  insurance_type = factor(c("Private", "Private"), levels = levels(cox_data$insurance_type)),
+  visits_last_year = c(4, 4),
+  missed_appointments = c(1, 1),
+  days_since_last_visit = c(10, 90),
+  overall_satisfaction = c(5, 2),
+  wait_time_satisfaction = c(5, 2),
+  staff_satisfaction = c(4, 4),
+  provider_rating = c(4, 4),
+  avg_out_of_pocket_cost = c(100, 100),
+  billing_issues = c(0, 0),
+  portal_usage = c(1,1),
+  referrals_made = c(2, 0),
+  distance_to_facility_miles = c(5, 25)
+)
+```
+
+## Fit the survival 
+```{r}
+fit_two <- survfit(best_model, newdata = new_patients)
+summary(fit_two)
+```
+
+### plot the cumulative hazard curves
+
+```{r}
+p_haz <- ggsurvplot(
+  fit_two,
+  fun = "cumhaz",
+  data = new_patients,
+  conf.int = FALSE,
+  censor = FALSE,
+  ggtheme = theme_minimal(base_size = 14),
+  legend.title = "Patient Profile",
+  legend.labs = c("Individual 1: Lower Risk", "Individual 2: Higher Risk"),
+  title = "Predicted Cumulative Hazard Curves for Two Individuals",
+  xlab = "Tenure (Months)",
+  ylab = "Cumulative Hazard"
+)
+
+p_haz$plot <- p_haz$plot +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.title = element_text(face = "bold")
+  )
+
+p_haz
+```
+##This graph shows how the risk of leaving (churn) increases over time for two patients.The blue line (Individual 2) is always higher. This means this patient has a higher risk of leaving earlier.The red line (Individual 1) is lower. This patient has a lower risk of leaving. For example at 75 months the cumulative risk of leaving is around 0.5 for individual1 and 1 for individual2 
+
+```{r}
+summary(fit_two, times = 75)$cumhaz
+
+```
+
+
+### the survival curves
+
+```{r}
+p_surv <- ggsurvplot(
+  fit_two,
+  data = new_patients,
+  conf.int = FALSE,
+  censor = FALSE,
+  ggtheme = theme_minimal(base_size = 14),
+  legend.title = "Patient Profile",
+  legend.labs = c("Individual 1: Lower Risk", "Individual 2: Higher Risk"),
+  title = "Predicted Survival Curves for Two Individuals",
+  xlab = "Tenure (Months)",
+  ylab = "Probability of Remaining Active"
+)
+
+p_surv$plot <- p_surv$plot +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.title = element_text(face = "bold")
+  )
+
+p_surv
+```
+##This graph shows the chance that a patient stays over time.The red line (Individual 1) stays higher.This patient is more likely to stay longerThe blue line (Individual 2) drops faster.This patient is more likely to leave sooner, For example the probability that the inidvidual 1 stay over 60 months is around 75% and for individual 2 is around 50%
+```{r}
+summary(fit_two, times = 60)$surv
+
+```
+
+
 
